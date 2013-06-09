@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2007-2012, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2002,2007-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -16,25 +16,6 @@
 #include "kgsl.h"
 #include "kgsl_sharedmem.h"
 #include "adreno.h"
-
-/* quad for copying GMEM to context shadow */
-#define QUAD_LEN 12
-
-static unsigned int gmem_copy_quad[QUAD_LEN] = {
-	0x00000000, 0x00000000, 0x3f800000,
-	0x00000000, 0x00000000, 0x3f800000,
-	0x00000000, 0x00000000, 0x3f800000,
-	0x00000000, 0x00000000, 0x3f800000
-};
-
-#define TEXCOORD_LEN 8
-
-static unsigned int gmem_copy_texcoord[TEXCOORD_LEN] = {
-	0x00000000, 0x3f800000,
-	0x3f800000, 0x3f800000,
-	0x00000000, 0x00000000,
-	0x3f800000, 0x00000000
-};
 
 /*
  * Helper functions
@@ -65,54 +46,6 @@ unsigned int uint2float(unsigned int uintval)
 	return exp | frac;
 }
 
-static void set_gmem_copy_quad(struct gmem_shadow_t *shadow)
-{
-	/* set vertex buffer values */
-	gmem_copy_quad[1] = uint2float(shadow->height);
-	gmem_copy_quad[3] = uint2float(shadow->width);
-	gmem_copy_quad[4] = uint2float(shadow->height);
-	gmem_copy_quad[9] = uint2float(shadow->width);
-
-	gmem_copy_quad[0] = 0;
-	gmem_copy_quad[6] = 0;
-	gmem_copy_quad[7] = 0;
-	gmem_copy_quad[10] = 0;
-
-	memcpy(shadow->quad_vertices.hostptr, gmem_copy_quad, QUAD_LEN << 2);
-
-	memcpy(shadow->quad_texcoords.hostptr, gmem_copy_texcoord,
-		TEXCOORD_LEN << 2);
-}
-
-/**
- * build_quad_vtxbuff - Create a quad for saving/restoring GMEM
- * @ context - Pointer to the context being created
- * @ shadow - Pointer to the GMEM shadow structure
- * @ incmd - Pointer to pointer to the temporary command buffer
- */
-
-/* quad for saving/restoring gmem */
-void build_quad_vtxbuff(struct adreno_context *drawctxt,
-		struct gmem_shadow_t *shadow, unsigned int **incmd)
-{
-	 unsigned int *cmd = *incmd;
-
-	/* quad vertex buffer location (in GPU space) */
-	shadow->quad_vertices.hostptr = cmd;
-	shadow->quad_vertices.gpuaddr = virt2gpu(cmd, &drawctxt->gpustate);
-
-	cmd += QUAD_LEN;
-
-	/* tex coord buffer location (in GPU space) */
-	shadow->quad_texcoords.hostptr = cmd;
-	shadow->quad_texcoords.gpuaddr = virt2gpu(cmd, &drawctxt->gpustate);
-
-	cmd += TEXCOORD_LEN;
-
-	set_gmem_copy_quad(shadow);
-	*incmd = cmd;
-}
-
 /**
  * adreno_drawctxt_create - create a new adreno draw context
  * @device - KGSL device to create the context on
@@ -139,19 +72,27 @@ int adreno_drawctxt_create(struct kgsl_device *device,
 	drawctxt->pagetable = pagetable;
 	drawctxt->bin_base_offset = 0;
 
-	if (flags & KGSL_CONTEXT_PREAMBLE)
-		drawctxt->flags |= CTXT_FLAGS_PREAMBLE;
+	/* FIXME: Deal with preambles */
 
-	if (flags & KGSL_CONTEXT_NO_GMEM_ALLOC)
-		drawctxt->flags |= CTXT_FLAGS_NOGMEMALLOC;
-
-	ret = adreno_dev->gpudev->ctxt_create(adreno_dev, drawctxt);
+	ret = adreno_dev->gpudev->ctxt_gpustate_shadow(adreno_dev, drawctxt);
 	if (ret)
 		goto err;
+
+	/* Save the shader instruction memory on context switching */
+	drawctxt->flags |= CTXT_FLAGS_SHADER_SAVE;
+
+	if (!(flags & KGSL_CONTEXT_NO_GMEM_ALLOC)) {
+		/* create gmem shadow */
+		ret = adreno_dev->gpudev->ctxt_gmem_shadow(adreno_dev,
+			drawctxt);
+		if (ret != 0)
+			goto err;
+	}
 
 	context->devctxt = drawctxt;
 	return 0;
 err:
+	kgsl_sharedmem_free(&drawctxt->gpustate);
 	kfree(drawctxt);
 	return ret;
 }
@@ -190,9 +131,6 @@ void adreno_drawctxt_destroy(struct kgsl_device *device,
 	}
 
 	adreno_idle(device, KGSL_TIMEOUT_DEFAULT);
-
-	if (adreno_is_a20x(adreno_dev))
-		kgsl_setstate(device, KGSL_MMUFLAGS_PTUPDATE);
 
 	kgsl_sharedmem_free(&drawctxt->gpustate);
 	kgsl_sharedmem_free(&drawctxt->context_gmem_shadow.gmemshadow);
@@ -246,13 +184,8 @@ void adreno_drawctxt_switch(struct adreno_device *adreno_dev,
 	}
 
 	/* already current? */
-	if (adreno_dev->drawctxt_active == drawctxt) {
-		if (adreno_dev->gpudev->ctxt_draw_workaround &&
-			adreno_is_a225(adreno_dev))
-				adreno_dev->gpudev->ctxt_draw_workaround(
-					adreno_dev);
+	if (adreno_dev->drawctxt_active == drawctxt)
 		return;
-	}
 
 	KGSL_CTXT_INFO(device, "from %p to %p flags %d\n",
 			adreno_dev->drawctxt_active, drawctxt, flags);

@@ -50,26 +50,6 @@ static inline unsigned long hweight_long(unsigned long w)
 }
 
 /**
- * rol64 - rotate a 64-bit value left
- * @word: value to rotate
- * @shift: bits to roll
- */
-static inline __u64 rol64(__u64 word, unsigned int shift)
-{
-	return (word << shift) | (word >> (64 - shift));
-}
-
-/**
- * ror64 - rotate a 64-bit value right
- * @word: value to rotate
- * @shift: bits to roll
- */
-static inline __u64 ror64(__u64 word, unsigned int shift)
-{
-	return (word >> shift) | (word << (64 - shift));
-}
-
-/**
  * rol32 - rotate a 32-bit value left
  * @word: value to rotate
  * @shift: bits to roll
@@ -168,7 +148,7 @@ static inline unsigned long __ffs64(u64 word)
 
 #ifdef __KERNEL__
 
-#ifndef find_last_bit
+#ifdef CONFIG_GENERIC_FIND_LAST_BIT
 /**
  * find_last_bit - find the last set bit in a memory region
  * @addr: The address to start the search at
@@ -178,7 +158,7 @@ static inline unsigned long __ffs64(u64 word)
  */
 extern unsigned long find_last_bit(const unsigned long *addr,
 				   unsigned long size);
-#endif
+#endif /* CONFIG_GENERIC_FIND_LAST_BIT */
 
 #endif /* __KERNEL__ */
 #endif

@@ -2,7 +2,7 @@
  * Driver for HighSpeed USB Client Controller in MSM7K
  *
  * Copyright (C) 2008 Google, Inc.
- * Copyright (c) 2009-2012, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2009-2011, Code Aurora Forum. All rights reserved.
  * Author: Mike Lockwood <lockwood@android.com>
  *         Brian Swetland <swetland@google.com>
  *
@@ -116,12 +116,8 @@ struct msm_endpoint {
 	*/
 	unsigned char bit;
 	unsigned char num;
-	unsigned long dTD_update_fail_count;
-	unsigned long false_prime_fail_count;
-	unsigned actual_prime_fail_count;
 
 	unsigned wedged:1;
-	unsigned ep_enabled:1;
 	/* pointers to DMA transfer list area */
 	/* these are allocated from the usb_info dma space */
 	struct ept_queue_head *head;
@@ -199,7 +195,6 @@ struct usb_info {
 	unsigned phy_status;
 	unsigned phy_fail_count;
 	unsigned prime_fail_count;
-	unsigned long dTD_update_fail_count;
 
 	struct usb_gadget		gadget;
 	struct usb_gadget_driver	*driver;
@@ -280,13 +275,12 @@ static enum usb_device_state msm_hsusb_get_state(void)
 
 static ssize_t print_switch_name(struct switch_dev *sdev, char *buf)
 {
-	return snprintf(buf, PAGE_SIZE, "%s\n", DRIVER_NAME);
+	return sprintf(buf, "%s\n", DRIVER_NAME);
 }
 
 static ssize_t print_switch_state(struct switch_dev *sdev, char *buf)
 {
-	return snprintf(buf, PAGE_SIZE, "%s\n",
-		sdev->state ? "online" : "offline");
+	return sprintf(buf, "%s\n", sdev->state ? "online" : "offline");
 }
 
 static inline enum chg_type usb_get_chg_type(struct usb_info *ui)
@@ -590,7 +584,6 @@ static void ept_prime_timer_func(unsigned long data)
 
 	spin_lock_irqsave(&ui->lock, flags);
 
-	ept->false_prime_fail_count++;
 	if ((readl_relaxed(USB_ENDPTPRIME) & n)) {
 		/*
 		 * ---- UNLIKELY ---
@@ -608,7 +601,6 @@ static void ept_prime_timer_func(unsigned long data)
 	rmb();
 	if (ept->req && (ept->req->item->info & INFO_ACTIVE)) {
 		ui->prime_fail_count++;
-		ept->actual_prime_fail_count++;
 		pr_err("%s(): ept%d%s prime failed. ept: config: %x"
 				"active: %x next: %x info: %x\n",
 				__func__, ept->num,
@@ -678,14 +670,6 @@ int usb_ept_queue_xfer(struct msm_endpoint *ept, struct usb_request *_req)
 		return -EMSGSIZE;
 
 	spin_lock_irqsave(&ui->lock, flags);
-
-	if (ept->num != 0 && !ept->ep_enabled) {
-		req->req.status = -EINVAL;
-		spin_unlock_irqrestore(&ui->lock, flags);
-		dev_err(&ui->pdev->dev,
-			"%s: called for disabled endpoint\n", __func__);
-		return -EINVAL;
-	}
 
 	if (req->busy) {
 		req->req.status = -EBUSY;
@@ -922,13 +906,6 @@ static void handle_setup(struct usb_info *ui)
 	u8 hnp;
 	unsigned long flags;
 #endif
-	/* USB hardware sometimes generate interrupt before
-	 * 8 bytes of SETUP packet are written to system memory.
-	 * This results in fetching wrong setup_data sometimes.
-	 * TODO: Remove below workaround of adding 1us delay once
-	 * it gets fixed in hardware.
-	 */
-	udelay(10);
 
 	memcpy(&ctl, ui->ep0out.head->setup_data, sizeof(ctl));
 	/* Ensure buffer is read before acknowledging to h/w */
@@ -1126,6 +1103,7 @@ static void handle_endpoint(struct usb_info *ui, unsigned bit)
 		ept->req, ept->req ? ept->req->item_dma : 0);
 	*/
 
+	del_timer(&ept->prime_timer);
 	/* expire all requests that are no longer active */
 	spin_lock_irqsave(&ui->lock, flags);
 	while ((req = ept->req)) {
@@ -1144,7 +1122,6 @@ static void handle_endpoint(struct usb_info *ui, unsigned bit)
 		if (info & INFO_ACTIVE)
 			break;
 
-		del_timer(&ept->prime_timer);
 		/* advance ept queue to the next request */
 		ept->req = req->next;
 		if (ept->req == 0)
@@ -1245,12 +1222,8 @@ static void flush_endpoint(struct msm_endpoint *ept)
 static irqreturn_t usb_interrupt(int irq, void *data)
 {
 	struct usb_info *ui = data;
-	struct msm_otg *dev = to_msm_otg(ui->xceiv);
 	unsigned n;
 	unsigned long flags;
-
-	if (atomic_read(&dev->in_lpm))
-		return IRQ_NONE;
 
 	n = readl(USB_USBSTS);
 	writel(n, USB_USBSTS);
@@ -1319,9 +1292,11 @@ static irqreturn_t usb_interrupt(int irq, void *data)
 			/* XXX: we can't seem to detect going offline,
 			 * XXX:  so deconfigure on reset for the time being
 			 */
-			dev_dbg(&ui->pdev->dev,
+			if (ui->driver) {
+				dev_dbg(&ui->pdev->dev,
 					"usb: notify offline\n");
-			ui->driver->disconnect(&ui->gadget);
+				ui->driver->disconnect(&ui->gadget);
+			}
 			/* cancel pending ep0 transactions */
 			flush_endpoint(&ui->ep0out);
 			flush_endpoint(&ui->ep0in);
@@ -1340,7 +1315,9 @@ static irqreturn_t usb_interrupt(int irq, void *data)
 		ui->flags = USB_FLAG_SUSPEND;
 		spin_unlock_irqrestore(&ui->lock, flags);
 
-		ui->driver->suspend(&ui->gadget);
+		if (ui->driver) {	// Prevent PID 202945
+			ui->driver->suspend(&ui->gadget);
+		}
 		schedule_work(&ui->work);
 #ifdef CONFIG_USB_OTG
 		/* notify otg for
@@ -1895,91 +1872,21 @@ const struct file_operations debug_wlocks_ops = {
 	.write = debug_write_release_wlocks,
 };
 
-static ssize_t debug_reprime_ep(struct file *file, const char __user *ubuf,
-				 size_t count, loff_t *ppos)
-{
-	struct usb_info *ui = file->private_data;
-	struct msm_endpoint *ept;
-	char kbuf[10];
-	unsigned int ep_num, dir;
-	unsigned long flags;
-	unsigned n, i;
-
-	memset(kbuf, 0, 10);
-
-	if (copy_from_user(kbuf, ubuf, count > 10 ? 10 : count))
-		return -EFAULT;
-
-	if (sscanf(kbuf, "%u %u", &ep_num, &dir) != 2)
-		return -EINVAL;
-
-	if (dir)
-		i = ep_num + 16;
-	else
-		i = ep_num;
-
-	spin_lock_irqsave(&ui->lock, flags);
-	ept = ui->ept + i;
-	n = 1 << ept->bit;
-
-	if ((readl_relaxed(USB_ENDPTPRIME) & n))
-		goto out;
-
-	if (readl_relaxed(USB_ENDPTSTAT) & n)
-		goto out;
-
-	/* clear speculative loads on item->info */
-	rmb();
-	if (ept->req && (ept->req->item->info & INFO_ACTIVE)) {
-		pr_err("%s(): ept%d%s prime failed. ept: config: %x"
-				"active: %x next: %x info: %x\n",
-				__func__, ept->num,
-				ept->flags & EPT_FLAG_IN ? "in" : "out",
-				ept->head->config, ept->head->active,
-				ept->head->next, ept->head->info);
-		writel_relaxed(n, USB_ENDPTPRIME);
-	}
-out:
-	spin_unlock_irqrestore(&ui->lock, flags);
-
-	return count;
-}
-
-static char buffer[512];
 static ssize_t debug_prime_fail_read(struct file *file, char __user *ubuf,
 				 size_t count, loff_t *ppos)
 {
 	struct usb_info *ui = file->private_data;
-	char *buf = buffer;
-	unsigned long flags;
-	struct msm_endpoint *ept;
-	int n;
-	int i = 0;
+	char kbuf[10];
+	size_t c = 0;
 
-	spin_lock_irqsave(&ui->lock, flags);
-	for (n = 0; n < 32; n++) {
-		ept = ui->ept + n;
-		if (ept->ep.maxpacket == 0)
-			continue;
+	memset(kbuf, 0, 10);
 
-		i += scnprintf(buf + i, PAGE_SIZE - i,
-			"ept%d %s false_prime_count=%lu prime_fail_count=%d dtd_fail_count=%lu\n",
-			ept->num, (ept->flags & EPT_FLAG_IN) ? "in " : "out",
-			ept->false_prime_fail_count,
-			ept->actual_prime_fail_count,
-			ept->dTD_update_fail_count);
-	}
+	c = scnprintf(kbuf, 10, "%d", ui->prime_fail_count);
 
-	i += scnprintf(buf + i, PAGE_SIZE - i,
-			   "dTD_update_fail count: %lu\n",
-			    ui->dTD_update_fail_count);
+	if (copy_to_user(ubuf, kbuf, c))
+		return -EFAULT;
 
-	i += scnprintf(buf + i, PAGE_SIZE - i,
-			   "prime_fail count: %d\n", ui->prime_fail_count);
-
-	spin_unlock_irqrestore(&ui->lock, flags);
-
-	return simple_read_from_buffer(ubuf, count, ppos, buf, i);
+	return c;
 }
 
 static int debug_prime_fail_open(struct inode *inode, struct file *file)
@@ -1991,7 +1898,6 @@ static int debug_prime_fail_open(struct inode *inode, struct file *file)
 const struct file_operations prime_fail_ops = {
 	.open = debug_prime_fail_open,
 	.read = debug_prime_fail_read,
-	.write = debug_reprime_ep,
 };
 
 static void usb_debugfs_init(struct usb_info *ui)
@@ -2006,7 +1912,7 @@ static void usb_debugfs_init(struct usb_info *ui)
 	debugfs_create_file("cycle", 0222, dent, ui, &debug_cycle_ops);
 	debugfs_create_file("release_wlocks", 0666, dent, ui,
 						&debug_wlocks_ops);
-	debugfs_create_file("prime_fail_countt", 0666, dent, ui,
+	debugfs_create_file("prime_fail_countt", 0222, dent, ui,
 						&prime_fail_ops);
 }
 #else
@@ -2024,7 +1930,6 @@ msm72k_enable(struct usb_ep *_ep, const struct usb_endpoint_descriptor *desc)
 	config_ept(ept);
 	ept->wedged = 0;
 	usb_ept_enable(ept, 1, ep_type);
-	ept->ep_enabled = 1;
 	return 0;
 }
 
@@ -2033,7 +1938,6 @@ static int msm72k_disable(struct usb_ep *_ep)
 	struct msm_endpoint *ept = to_msm_endpoint(_ep);
 
 	usb_ept_enable(ept, 0, 0);
-	ept->ep_enabled = 0;
 	flush_endpoint(ept);
 	return 0;
 }
@@ -2296,14 +2200,13 @@ static int msm72k_pullup_internal(struct usb_gadget *_gadget, int is_active)
 static int msm72k_pullup(struct usb_gadget *_gadget, int is_active)
 {
 	struct usb_info *ui = container_of(_gadget, struct usb_info, gadget);
-	struct msm_otg *otg = to_msm_otg(ui->xceiv);
 	unsigned long flags;
+
 
 	atomic_set(&ui->softconnect, is_active);
 
 	spin_lock_irqsave(&ui->lock, flags);
-	if (ui->usb_state == USB_STATE_NOTATTACHED || ui->driver == NULL ||
-		atomic_read(&otg->chg_type) == USB_CHG_TYPE__WALLCHARGER) {
+	if (ui->usb_state == USB_STATE_NOTATTACHED || ui->driver == NULL) {
 		spin_unlock_irqrestore(&ui->lock, flags);
 		return 0;
 	}
@@ -2346,6 +2249,16 @@ static int msm72k_wakeup(struct usb_gadget *_gadget)
 	enable_irq(otg->irq);
 
 	return 0;
+}
+
+static int msm72k_vbus_get_state(struct usb_gadget *_gadget)
+{
+	int b_session=0;
+	struct usb_info *ui = container_of(_gadget, struct usb_info, gadget);
+	struct msm_otg *otg = to_msm_otg(ui->xceiv);
+
+	b_session= is_b_sess_vld();
+	return b_session;
 }
 
 /* when Gadget is configured, it will indicate how much power
@@ -2396,6 +2309,7 @@ static const struct usb_gadget_ops msm72k_ops = {
 	.pullup		= msm72k_pullup,
 	.wakeup		= msm72k_wakeup,
 	.set_selfpowered = msm72k_set_selfpowered,
+	.get_vbus_state = msm72k_vbus_get_state,
 };
 
 static void usb_do_remote_wakeup(struct work_struct *w)
@@ -2466,7 +2380,7 @@ static ssize_t show_usb_chg_current(struct device *dev,
 	struct usb_info *ui = the_usb_info;
 	size_t count;
 
-	count = snprintf(buf, PAGE_SIZE, "%d", ui->chg_current);
+	count = sprintf(buf, "%d", ui->chg_current);
 
 	return count;
 }
@@ -2482,7 +2396,7 @@ static ssize_t show_usb_chg_type(struct device *dev,
 			"DEDICATED CHARGER",
 			"INVALID"};
 
-	count = snprintf(buf, PAGE_SIZE, "%s",
+	count = sprintf(buf, "%s",
 			chg_type[atomic_read(&otg->chg_type)]);
 
 	return count;
@@ -2530,7 +2444,7 @@ static ssize_t show_host_avail(struct device *dev,
 	unsigned long flags;
 
 	spin_lock_irqsave(&ui->lock, flags);
-	count = snprintf(buf, PAGE_SIZE, "%d\n", ui->hnp_avail);
+	count = sprintf(buf, "%d\n", ui->hnp_avail);
 	spin_unlock_irqrestore(&ui->lock, flags);
 
 	return count;
@@ -2548,20 +2462,6 @@ static struct attribute_group otg_attr_grp = {
 	.attrs = otg_attrs,
 };
 #endif
-
-void usb_force_reset(void)
-{
-	struct usb_info *ui = the_usb_info;
-	unsigned long flags;
-
-	spin_lock_irqsave(&ui->lock, flags);
-	ui->flags |= USB_FLAG_RESET;
-	schedule_work(&ui->work);
-	spin_unlock_irqrestore(&ui->lock, flags);
-
-	return;
-}
-EXPORT_SYMBOL(usb_force_reset);
 
 static int msm72k_probe(struct platform_device *pdev)
 {
