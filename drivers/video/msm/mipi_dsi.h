@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2009-2012, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -339,7 +339,6 @@ void mipi_dsi_unprepare_clocks(void);
 void mipi_dsi_ahb_ctrl(u32 enable);
 void mipi_dsi_phy_ctrl(int on);
 #else
-#if 0
 static inline void mipi_dsi_clk_enable(void)
 {
 	/* empty */
@@ -364,7 +363,6 @@ void mipi_dsi_phy_ctrl(int on)
 {
 	/* empty */
 }
-#endif
 #endif
 
 void cont_splash_clk_ctrl(int enable);

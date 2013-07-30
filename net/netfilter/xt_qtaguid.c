@@ -1092,13 +1092,18 @@ static void iface_stat_create(struct net_device *net_dev,
 	spin_lock_bh(&iface_stat_list_lock);
 	entry = get_iface_entry(ifname);
 	if (entry != NULL) {
+		bool activate = !ipv4_is_loopback(ipaddr);
 		IF_DEBUG("qtaguid: iface_stat: create(%s): entry=%p\n",
 			 ifname, entry);
 		iface_check_stats_reset_and_adjust(net_dev, entry);
-		_iface_stat_set_active(entry, net_dev, true);
+		_iface_stat_set_active(entry, net_dev, activate);
 		IF_DEBUG("qtaguid: %s(%s): "
 			 "tracking now %d on ip=%pI4\n", __func__,
-			 entry->ifname, true, &ipaddr);
+			 entry->ifname, activate, &ipaddr);
+		goto done_unlock_put;
+	} else if (ipv4_is_loopback(ipaddr)) {
+		IF_DEBUG("qtaguid: iface_stat: create(%s): "
+			 "ignore loopback dev. ip=%pI4\n", ifname, &ipaddr);
 		goto done_unlock_put;
 	}
 
@@ -1149,13 +1154,19 @@ static void iface_stat_create_ipv6(struct net_device *net_dev,
 	spin_lock_bh(&iface_stat_list_lock);
 	entry = get_iface_entry(ifname);
 	if (entry != NULL) {
+		bool activate = !(addr_type & IPV6_ADDR_LOOPBACK);
 		IF_DEBUG("qtaguid: %s(%s): entry=%p\n", __func__,
 			 ifname, entry);
 		iface_check_stats_reset_and_adjust(net_dev, entry);
-		_iface_stat_set_active(entry, net_dev, true);
+		_iface_stat_set_active(entry, net_dev, activate);
 		IF_DEBUG("qtaguid: %s(%s): "
 			 "tracking now %d on ip=%pI6c\n", __func__,
-			 entry->ifname, true, &ifa->addr);
+			 entry->ifname, activate, &ifa->addr);
+		goto done_unlock_put;
+	} else if (addr_type & IPV6_ADDR_LOOPBACK) {
+		IF_DEBUG("qtaguid: %s(%s): "
+			 "ignore loopback dev. ip=%pI6c\n", __func__,
+			 ifname, &ifa->addr);
 		goto done_unlock_put;
 	}
 
@@ -1450,8 +1461,6 @@ static void if_tag_stat_update(const char *ifname, uid_t uid,
 		 *  - No {0, uid_tag} stats and no {acc_tag, uid_tag} stats.
 		 */
 		new_tag_stat = create_if_tag_stat(iface_entry, uid_tag);
-		if (!new_tag_stat)
-			goto unlock;
 		uid_tag_counters = &new_tag_stat->counters;
 	} else {
 		uid_tag_counters = &tag_stat_entry->counters;
@@ -1460,8 +1469,6 @@ static void if_tag_stat_update(const char *ifname, uid_t uid,
 	if (acct_tag) {
 		/* Create the child {acct_tag, uid_tag} and hook up parent. */
 		new_tag_stat = create_if_tag_stat(iface_entry, tag);
-		if (!new_tag_stat)
-			goto unlock;
 		new_tag_stat->parent_counters = uid_tag_counters;
 	} else {
 		/*
@@ -1475,7 +1482,6 @@ static void if_tag_stat_update(const char *ifname, uid_t uid,
 		BUG_ON(!new_tag_stat);
 	}
 	tag_stat_update(new_tag_stat, direction, proto, bytes);
-unlock:
 	spin_unlock_bh(&iface_entry->tag_stat_list_lock);
 }
 
@@ -2745,7 +2751,7 @@ static int qtudev_open(struct inode *inode, struct file *file)
 	utd_entry = get_uid_data(current_fsuid(), &utd_entry_found);
 	if (IS_ERR_OR_NULL(utd_entry)) {
 		res = PTR_ERR(utd_entry);
-		goto err_unlock;
+		goto err;
 	}
 
 	/* Look for existing PID based proc_data */
@@ -2787,8 +2793,8 @@ err_unlock_free_utd:
 		rb_erase(&utd_entry->node, &uid_tag_data_tree);
 		kfree(utd_entry);
 	}
-err_unlock:
 	spin_unlock_bh(&uid_tag_data_tree_lock);
+err:
 	return res;
 }
 

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2012, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2012, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -26,6 +26,7 @@
 #include "mdp.h"
 #include "msm_fb.h"
 #include "mdp4.h"
+#include "mipi_dsi.h"
 
 #define DSI_VIDEO_BASE	0xF0000
 #define DMA_P_BASE      0x90000
@@ -33,7 +34,7 @@
 static int first_pixel_start_x;
 static int first_pixel_start_y;
 
-ssize_t mdp_dma_video_show_event(struct device *dev,
+static ssize_t vsync_show_event(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	ssize_t ret = 0;
@@ -50,6 +51,15 @@ ssize_t mdp_dma_video_show_event(struct device *dev,
 	buf[strlen(buf) + 1] = '\0';
 	return ret;
 }
+
+static DEVICE_ATTR(vsync_event, S_IRUGO, vsync_show_event, NULL);
+static struct attribute *vsync_fs_attrs[] = {
+	&dev_attr_vsync_event.attr,
+	NULL,
+};
+static struct attribute_group vsync_fs_attr_group = {
+	.attrs = vsync_fs_attrs,
+};
 
 int mdp_dsi_video_on(struct platform_device *pdev)
 {
@@ -91,7 +101,7 @@ int mdp_dsi_video_on(struct platform_device *pdev)
 	struct fb_var_screeninfo *var;
 	struct msm_fb_data_type *mfd;
 	int ret;
-	uint32 mask, curr;
+	uint32_t mask, curr;
 
 	mfd = (struct msm_fb_data_type *)platform_get_drvdata(pdev);
 
@@ -148,6 +158,7 @@ int mdp_dsi_video_on(struct platform_device *pdev)
 	/* MDP cmd block enable */
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_ON, FALSE);
 
+
 	/* starting address */
 	MDP_OUTP(MDP_BASE + DMA_P_BASE + 0x8, (uint32) buf);
 
@@ -162,8 +173,8 @@ int mdp_dsi_video_on(struct platform_device *pdev)
 	MDP_OUTP(MDP_BASE + DMA_P_BASE + 0x10, 0);
 
 	/* dma config */
-	curr = inpdw(MDP_BASE + 0x90000);
-	mask = 0xBFFFFFFF;
+	curr = inpdw(MDP_BASE + DMA_P_BASE);
+	mask = 0x0FFFFFFF;
 	dma2_cfg_reg = (dma2_cfg_reg & mask) | (curr & ~mask);
 	MDP_OUTP(MDP_BASE + DMA_P_BASE, dma2_cfg_reg);
 
@@ -211,6 +222,13 @@ int mdp_dsi_video_on(struct platform_device *pdev)
 	ctrl_polarity =	(data_en_polarity << 2) |
 		(vsync_polarity << 1) | (hsync_polarity);
 
+	if (!(mfd->cont_splash_done)) {
+		mdp_pipe_ctrl(MDP_CMD_BLOCK,
+			MDP_BLOCK_POWER_OFF, FALSE);
+		MDP_OUTP(MDP_BASE + DSI_VIDEO_BASE, 0);
+		mipi_dsi_controller_cfg(0);
+	}
+
 	MDP_OUTP(MDP_BASE + DSI_VIDEO_BASE + 0x4, hsync_ctrl);
 	MDP_OUTP(MDP_BASE + DSI_VIDEO_BASE + 0x8, vsync_period);
 	MDP_OUTP(MDP_BASE + DSI_VIDEO_BASE + 0xc, vsync_pulse_width);
@@ -235,6 +253,20 @@ int mdp_dsi_video_on(struct platform_device *pdev)
 
 	/* MDP cmd block disable */
 	mdp_pipe_ctrl(MDP_CMD_BLOCK, MDP_BLOCK_POWER_OFF, FALSE);
+
+	if (!vsync_cntrl.sysfs_created) {
+		ret = sysfs_create_group(&vsync_cntrl.dev->kobj,
+			&vsync_fs_attr_group);
+		if (ret) {
+			pr_err("%s: sysfs creation failed, ret=%d\n",
+				__func__, ret);
+			return ret;
+		}
+
+		kobject_uevent(&vsync_cntrl.dev->kobj, KOBJ_ADD);
+		pr_debug("%s: kobject_uevent(KOBJ_ADD)\n", __func__);
+		vsync_cntrl.sysfs_created = 1;
+	}
 
 	return ret;
 }
