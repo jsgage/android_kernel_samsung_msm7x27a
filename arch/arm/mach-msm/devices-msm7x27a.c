@@ -357,6 +357,26 @@ struct platform_device msm_device_uart1 = {
 	.resource	= resources_uart1,
 };
 
+static struct resource resources_uart3[] = {
+	{
+		.start	= INT_UART3,
+		.end	= INT_UART3,
+		.flags	= IORESOURCE_IRQ,
+	},
+	{
+		.start	= MSM7XXX_UART3_PHYS,
+		.end	= MSM7XXX_UART3_PHYS + MSM7XXX_UART3_SIZE - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+};
+
+struct platform_device msm_device_uart3 = {
+	.name	= "msm_serial",
+	.id	= 2,
+	.num_resources	= ARRAY_SIZE(resources_uart3),
+	.resource	= resources_uart3,
+};
+
 #define MSM_UART1DM_PHYS      0xA0200000
 static struct resource msm_uart1_dm_resources[] = {
 	{
@@ -744,6 +764,7 @@ struct platform_device msm7x27a_device_vfe = {
 
 #endif
 
+#if 0
 /* Command sequence for simple WFI */
 static uint8_t spm_wfi_cmd_sequence[] __initdata = {
 	0x04, 0x03, 0x04, 0x0f,
@@ -794,6 +815,7 @@ void __init msm8x25_spm_device_init(void)
 {
 	msm_spm_init(msm_spm_data, ARRAY_SIZE(msm_spm_data));
 }
+#endif
 
 #define MDP_BASE		0xAA200000
 #define MIPI_DSI_HW_BASE	0xA1100000
@@ -1969,12 +1991,14 @@ void __init msm_common_io_init(void)
 	msm7x27x_cache_init();
 }
 
+# if 0
 void __init msm8625_init_irq(void)
 {
 	msm_gic_irq_extn_init();
 	gic_init(0, GIC_PPI_START, MSM_QGIC_DIST_BASE,
 			(void *)MSM_QGIC_CPU_BASE);
 }
+#endif
 
 void __init msm8625_map_io(void)
 {

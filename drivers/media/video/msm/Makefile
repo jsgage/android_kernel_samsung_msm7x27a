@@ -4,7 +4,9 @@ CFLAGS_REMOVE_msm_vfe8x.o = -Wframe-larger-than=1024
 endif
 
 EXTRA_CFLAGS += -Idrivers/media/video/msm/io
+ifneq ($(CONFIG_MSM_CAMERA_LEGACY),y)
 obj-$(CONFIG_MSM_CAMERA) += io/
+endif
 ifeq ($(CONFIG_MSM_CAMERA_V4L2),y)
   EXTRA_CFLAGS += -Idrivers/media/video/msm/csi
   EXTRA_CFLAGS += -Idrivers/media/video/msm/io
@@ -15,15 +17,27 @@ ifeq ($(CONFIG_MSM_CAMERA_V4L2),y)
   obj-$(CONFIG_MSM_CAMERA) += io/ eeprom/ sensors/ actuators/ csi/
   obj-$(CONFIG_MSM_CAMERA) += msm_gesture.o
 else
-  obj-$(CONFIG_MSM_CAMERA) += msm_camera.o
+  ifeq ($(CONFIG_MSM_CAMERA_LEGACY),y)
+    obj-$(CONFIG_MSM_CAMERA) += msm_camera_legacy.o
+  else
+    obj-$(CONFIG_MSM_CAMERA) += msm_camera.o
+  endif
 endif
 obj-$(CONFIG_MSM_CAMERA) += msm_axi_qos.o gemini/
-obj-$(CONFIG_MSM_CAMERA_FLASH) += flash.o
-obj-$(CONFIG_ARCH_MSM_ARM11) += msm_vfe7x.o
-ifeq ($(CONFIG_MSM_CAMERA_V4L2),y)
-  obj-$(CONFIG_ARCH_MSM7X27A) += msm_vfe7x27a_v4l2.o
+ifeq ($(CONFIG_MSM_CAMERA_LEGACY),y)
+	obj-$(CONFIG_MSM_CAMERA_FLASH) += flash_legacy.o
 else
-  obj-$(CONFIG_ARCH_MSM7X27A) += msm_vfe7x27a.o
+	obj-$(CONFIG_MSM_CAMERA_FLASH) += flash_legacy.o
+endif	
+obj-$(CONFIG_ARCH_MSM_ARM11) += msm_vfe7x.o msm_io7x.o
+ifeq ($(CONFIG_MSM_CAMERA_V4L2),y)
+  obj-$(CONFIG_ARCH_MSM7X27A) += msm_vfe7x27a_v4l2.o msm_io_7x27a_v4l2.o
+else
+	ifeq ($(CONFIG_MSM_CAMERA_LEGACY),y)
+  		obj-$(CONFIG_ARCH_MSM7X27A) += msm_vfe7x27a_legacy.o msm_io_7x27a_legacy.o
+  	else
+  		obj-$(CONFIG_ARCH_MSM7X27A) += msm_vfe7x27a.o msm_io_7x27a.o
+	endif  	
 endif
 obj-$(CONFIG_ARCH_QSD8X50) += msm_vfe8x.o msm_vfe8x_proc.o
 ifeq ($(CONFIG_MSM_CAMERA_V4L2),y)
@@ -53,6 +67,7 @@ ifneq ($(CONFIG_MSM_CAMERA_V4L2),y)
   obj-$(CONFIG_WEBCAM_OV7692_QRD) += ov7692_qrd.o
 endif
 obj-$(CONFIG_QS_S5K4E1) += qs_s5k4e1.o qs_s5k4e1_reg.o
+obj-$(CONFIG_SR300PC20) += sr300pc20.o sec_cam_pmic.o
 obj-$(CONFIG_VB6801) += vb6801.o
 obj-$(CONFIG_IMX072) += imx072.o imx072_reg.o
 obj-$(CONFIG_OV5640) += ov5640.o

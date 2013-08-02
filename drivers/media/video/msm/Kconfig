@@ -1,15 +1,10 @@
-config MSM_CAMERA_V4L2
-        bool "MSM Camera V4L2 Interface"
-        depends on MSM_CAMERA
-        default n
-        ---help---
-          This flag enables V4L2 interface of MSM
-          camera driver. If enabled, application interacts
-          with /dev/video0 through V4L2 APIs. Otherwise,
-          native APIs are used through /dev/config0, /dev/frame0,
-          and /dev/control0.
-
 comment "Camera Sensor Selection"
+config SR300PC20
+	bool "Sensor sr300pc20 (3M)"
+	depends on MSM_CAMERA && !ARCH_MSM8X60 && !MSM_CAMERA_V4L2
+	default n
+	---help---
+	  Siliconfile 3M Sensor with Autofocus
 config MT9T013
 	bool "Sensor mt9t013 (BAYER 3M)"
 	depends on MSM_CAMERA && !ARCH_MSM8X60 && !ARCH_MSM8960 && !MSM_CAMERA_V4L2

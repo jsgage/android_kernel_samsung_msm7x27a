@@ -1,3 +1,6 @@
+#ifdef CONFIG_MSM_CAMERA_LEGACY
+#include "mach/camera_legacy.h"
+#else
 /* Copyright (c) 2009-2012, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
@@ -638,3 +641,4 @@ int msm_camera_config_gpio_table
 int msm_camera_request_gpio_table
 	(struct msm_camera_sensor_info *sinfo, int gpio_en);
 #endif
+#endif /* CONFIG_MSM_CAMERA_LEGACY */
