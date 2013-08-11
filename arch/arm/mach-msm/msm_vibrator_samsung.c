@@ -20,6 +20,7 @@
 #include <linux/clk.h>
 #include <../../../drivers/staging/android/timed_output.h>
 #include <linux/sched.h>
+#include <linux/module.h>
 
 #include <mach/msm_rpcrouter.h>
 #include <mach/samsung_vibe.h>
