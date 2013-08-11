@@ -2385,8 +2385,9 @@ static struct msm_serial_hs_platform_data msm_uart_dm1_pdata = {
 	.rx_to_inject		= 0xFD,
 };
 #endif
+
 static struct msm_pm_platform_data msm7x27a_pm_data[MSM_PM_SLEEP_MODE_NR] = {
-	[MSM_PM_MODE(0, MSM_PM_SLEEP_MODE_POWER_COLLAPSE)] = {
+	[MSM_PM_SLEEP_MODE_POWER_COLLAPSE] = {
 					.idle_supported = 1,
 					.suspend_supported = 1,
 					.idle_enabled = 1,
@@ -2394,7 +2395,7 @@ static struct msm_pm_platform_data msm7x27a_pm_data[MSM_PM_SLEEP_MODE_NR] = {
 					.latency = 16000,
 					.residency = 20000,
 	},
-	[MSM_PM_MODE(0, MSM_PM_SLEEP_MODE_POWER_COLLAPSE_NO_XO_SHUTDOWN)] = {
+	[MSM_PM_SLEEP_MODE_POWER_COLLAPSE_NO_XO_SHUTDOWN] = {
 					.idle_supported = 1,
 					.suspend_supported = 1,
 					.idle_enabled = 1,
@@ -2402,7 +2403,7 @@ static struct msm_pm_platform_data msm7x27a_pm_data[MSM_PM_SLEEP_MODE_NR] = {
 					.latency = 12000,
 					.residency = 20000,
 	},
-	[MSM_PM_MODE(0, MSM_PM_SLEEP_MODE_RAMP_DOWN_AND_WAIT_FOR_INTERRUPT)] = {
+	[MSM_PM_SLEEP_MODE_RAMP_DOWN_AND_WAIT_FOR_INTERRUPT] = {
 					.idle_supported = 1,
 					.suspend_supported = 1,
 					.idle_enabled = 0,
@@ -2410,7 +2411,7 @@ static struct msm_pm_platform_data msm7x27a_pm_data[MSM_PM_SLEEP_MODE_NR] = {
 					.latency = 2000,
 					.residency = 0,
 	},
-	[MSM_PM_MODE(0, MSM_PM_SLEEP_MODE_WAIT_FOR_INTERRUPT)] = {
+	[MSM_PM_SLEEP_MODE_WAIT_FOR_INTERRUPT] = {
 					.idle_supported = 1,
 					.suspend_supported = 1,
 					.idle_enabled = 1,
@@ -3485,7 +3486,7 @@ static struct platform_device *rumi_sim_devices[] __initdata = {
 	&msm_gsbi1_qup_i2c_device
 };
 
-static struct platform_device *surf_ffa_devices[] __initdata = {
+static struct platform_device *msm7627a_surf_ffa_devices[] __initdata = {
 	&msm_device_dmov,
 	&msm_device_smd,
 	&msm_device_uart1,
@@ -4064,6 +4065,44 @@ static void __init msm7627a_rumi3_init(void)
 #define LED_GPIO_PDM		96
 #define UART1DM_RX_GPIO		45
 
+static void __init msm7x27a_add_footswitch_devices(void)
+{
+	platform_add_devices(msm_footswitch_devices,
+			msm_num_footswitch_devices);
+}
+
+static void __init msm7x27a_add_platform_devices(void)
+{
+	platform_add_devices(msm7627a_surf_ffa_devices,
+		ARRAY_SIZE(msm7627a_surf_ffa_devices));
+}
+
+static void __init msm7x27a_uartdm_config(void)
+{
+	msm7x27a_cfg_uart2dm_serial();
+	msm_uart_dm1_pdata.wakeup_irq = gpio_to_irq(UART1DM_RX_GPIO);
+	msm_device_uart_dm1.dev.platform_data = &msm_uart_dm1_pdata;
+}
+
+static void __init msm7x27a_otg_gadget(void)
+{
+	msm_otg_pdata.swfi_latency =
+	msm7x27a_pm_data[
+	MSM_PM_SLEEP_MODE_RAMP_DOWN_AND_WAIT_FOR_INTERRUPT].latency;
+	msm_device_otg.dev.platform_data = &msm_otg_pdata;
+	msm_device_gadget_peripheral.dev.platform_data =
+		&msm_gadget_pdata;
+}
+
+static void __init msm7x27a_pm_init(void)
+{
+	msm_pm_set_platform_data(msm7x27a_pm_data,
+			ARRAY_SIZE(msm7x27a_pm_data));
+	BUG_ON(msm_pm_boot_init(&msm_pm_boot_pdata));
+
+	msm_pm_register_irqs();
+}
+
 static int __init msm7x27a_init_ar6000pm(void)
 {
 	return platform_device_register(&msm_wlan_ar6000_pm_device);
@@ -4143,46 +4182,27 @@ static void __init msm7x2x_init(void)
 	msm_device_i2c_init();
 	msm7x27a_init_ebi2();
 
-#ifdef CONFIG_SERIAL_MSM_HS
-	msm_uart_dm1_pdata.wakeup_irq = gpio_to_irq(UART1DM_RX_GPIO);
-	msm_device_uart_dm1.dev.platform_data = &msm_uart_dm1_pdata;
-#endif
-
-#ifdef CONFIG_USB_MSM_OTG_72K
-	msm_otg_pdata.swfi_latency =
-		msm7x27a_pm_data
-		[MSM_PM_SLEEP_MODE_RAMP_DOWN_AND_WAIT_FOR_INTERRUPT].latency;
-	msm_device_otg.dev.platform_data = &msm_otg_pdata;
-#endif
-	msm_device_gadget_peripheral.dev.platform_data =
-		&msm_gadget_pdata;
 	msm7x27a_cfg_smsc911x();
 #ifdef CONFIG_SAMSUNG_JACK
-		sec_jack_gpio_init();
+	sec_jack_gpio_init();
 #endif
-	platform_add_devices(msm_footswitch_devices,
-			msm_num_footswitch_devices);
-	platform_add_devices(surf_ffa_devices,
-			ARRAY_SIZE(surf_ffa_devices));
-		if (!kernel_uart_flag)
-		{
-			platform_device_register(&msm_device_uart3);
-		}
+	msm7x27a_otg_gadget();
+
+	if (!kernel_uart_flag)
+	{
+		platform_device_register(&msm_device_uart3);
+	}
+
+	msm7x27a_add_footswitch_devices();
+	msm7x27a_add_platform_devices();
 
 	/* Ensure ar6000pm device is registered before MMC/SDC */
 	msm7x27a_init_ar6000pm();
 	msm7x27a_init_mmc();
-
 	lcdc_trebon_gpio_init();
 	msm_fb_add_devices();
-
-
-#ifdef CONFIG_USB_EHCI_MSM_72K
 	msm7x2x_init_host();
-#endif
-
-	msm_pm_set_platform_data(msm7x27a_pm_data,
-				ARRAY_SIZE(msm7x27a_pm_data));
+	msm7x27a_pm_init();
 
 	BUG_ON(msm_pm_boot_init(&msm_pm_boot_pdata));
 
@@ -4230,8 +4250,6 @@ static void __init msm7x2x_init(void)
        /*7x25a kgsl initializations*/
        msm7x25a_kgsl_3d0_init();
 
-	   //ar6000_prealloc_init();
-
 #if defined(CONFIG_PN544)
 	config_gpio_table_for_nfc();
 	platform_device_register(&pn544_i2c_gpio_device);
@@ -4245,53 +4263,13 @@ static void __init msm7x2x_init_early(void)
 	msm_msm7x2x_allocate_memory_regions();
 }
 
-MACHINE_START(MSM7X27A_RUMI3, "QCT MSM7x27a RUMI3")
-	.atag_offset = 0x100,
-	.map_io		= msm_common_io_init,
-	.reserve	= msm7x27a_reserve,
-	.init_irq	= msm_init_irq,
-	.init_machine	= msm7627a_rumi3_init,
-	.timer		= &msm_timer,
-	.init_early     = msm7x2x_init_early,
-	.handle_irq	= vic_handle_irq,
-MACHINE_END
-MACHINE_START(MSM7X27A_SURF, "QCT MSM7x27a SURF")
-	.atag_offset = 0x100,
-	.map_io		= msm_common_io_init,
-	.reserve	= msm7x27a_reserve,
-	.init_irq	= msm_init_irq,
-	.init_machine	= msm7x2x_init,
-	.timer		= &msm_timer,
-	.init_early     = msm7x2x_init_early,
-	.handle_irq	= vic_handle_irq,
-MACHINE_END
 MACHINE_START(MSM7X27A_FFA, "QCT MSM7x27a FFA")
-	.atag_offset = 0x100,
+	.atag_offset	= 0x100,
 	.map_io		= msm_common_io_init,
 	.reserve	= msm7x27a_reserve,
 	.init_irq	= msm_init_irq,
 	.init_machine	= msm7x2x_init,
 	.timer		= &msm_timer,
-	.init_early     = msm7x2x_init_early,
-	.handle_irq	= vic_handle_irq,
-MACHINE_END
-MACHINE_START(MSM7625A_SURF, "QCT MSM7625a SURF")
-	.atag_offset = 0x100,
-	.map_io         = msm_common_io_init,
-	.reserve        = msm7x27a_reserve,
-	.init_irq       = msm_init_irq,
-	.init_machine   = msm7x2x_init,
-	.timer          = &msm_timer,
-	.init_early     = msm7x2x_init_early,
-	.handle_irq	= vic_handle_irq,
-MACHINE_END
-MACHINE_START(MSM7625A_FFA, "QCT MSM7625a FFA")
-	.atag_offset = 0x100,
-	.map_io         = msm_common_io_init,
-	.reserve        = msm7x27a_reserve,
-	.init_irq       = msm_init_irq,
-	.init_machine   = msm7x2x_init,
-	.timer          = &msm_timer,
 	.init_early     = msm7x2x_init_early,
 	.handle_irq	= vic_handle_irq,
 MACHINE_END
